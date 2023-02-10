@@ -1,0 +1,306 @@
+sourceCpp(code='
+
+// [[Rcpp::depends(RcppArmadillo)]]
+#include <RcppArmadillo.h>
+#include <RcppArmadilloExtensions/sample.h>
+
+ 
+#include <cmath>
+#include <random>
+#include <string>
+#include <vector>
+
+//------------------------------------ Class Specific Functions -------------------------------------------//
+class iData{
+	
+  public:
+	
+	double r;    // time from study start to randomization (e.g., enrollment)
+	double a;    // time from enrollment to outcome ascertainment
+	double e;    // total elapsed time
+
+	double y;    // outcome data
+	double c;    // number of trials (for binomial data), censorship indicator (not yet supported);
+	
+	arma::rowvec x; // covariate vector;
+	
+	iData(int & G,int & P);
+		
+};
+
+iData::iData(int & G, int & P){ x.resize(G+P); }
+
+bool order_elapsed(iData i1, iData i2) 
+{ 
+    return (i1.e < i2.e); 
+} 
+
+//------------------------------- Error Checking Function Prototypes -------------------------------------//
+
+Rcpp::List error_checking_dDist(std::string & dDist, std::string & dLink, std::vector<arma::vec> & dParms, int & G, int & P);
+Rcpp::List error_checking_rDist(std::string & rDist, arma::vec & rParms);
+Rcpp::List error_checking_aDist(std::string & aDist, arma::vec & aParms);
+Rcpp::List error_checking_cov(int & P,std::vector<std::string> & cDist, std::vector<arma::vec> & cParms);
+void err_print(Rcpp::List & x);
+
+
+
+//------------------------------------ Main Simulation Function ------------------------------------------//
+// [[Rcpp::export]]
+Rcpp::List simulation(	std::string & dDist, std::string & dLink, std::vector<arma::vec> & dParms,
+						std::string & rDist, arma::vec & rParms,
+						std::string & aDist, arma::vec & aParms,
+						int & T,int & G,int & B,int & N,
+						int & P,std::vector<std::string> & cDist, std::vector<arma::vec> & cParms
+						)
+{
+	// error checking code -- ask about why as<T>(X) is needed;
+	Rcpp::List err1 = error_checking_dDist(dDist,dLink,dParms,G,P);	
+		if (Rcpp::as<std::string>(err1[0]) != "No Input Errors Dectected.") { err_print(err1); return err1; }
+		
+	Rcpp::List err2 = error_checking_rDist(rDist,rParms); 			
+		if (Rcpp::as<std::string>(err2[0]) != "No Input Errors Dectected.") { err_print(err2); return err2; }
+		
+    Rcpp::List err3 = error_checking_aDist(aDist,aParms); 			
+		if (Rcpp::as<std::string>(err3[0]) != "No Input Errors Dectected.") { err_print(err3); return err3; }
+
+	Rcpp::List err4 = error_checking_cov(P,cDist,cParms);
+		if (Rcpp::as<std::string>(err4[0]) != "No Input Errors Dectected.") { err_print(err4); return err4; }		
+		
+		
+	Rcpp::RNGScope scope;
+	
+	// for treatment group sampling;
+	
+		// create a complete block to resample;
+		arma::ivec trtseq(B); 
+		for(int i=0;i<B;i++) {trtseq[i]= i % G;}
+	
+		// create vector of sampling probabilities for a complete block;
+		arma::vec rP(B);	rP.fill(1.0/B);
+		
+		// create vector container for sampled order of block;
+		arma::ivec trtseq_random(B);
+	
+
+	// create vectors, matrices for sorted study data;
+	arma::vec y(N);       
+	arma::vec c(N);       
+	arma::mat x(N,G+P);   
+	
+	arma::vec rv(N);      
+	arma::vec av(N);    
+	arma::vec ev(N); 	
+	
+	
+	// integer treatment group and factor levels;
+	Rcpp::IntegerVector treatmentGroup(N);
+	Rcpp::CharacterVector charTreatmentGroup = {"A","B","C","D","E","F","G"};
+		treatmentGroup.attr("class") = "factor";
+		treatmentGroup.attr("levels") = charTreatmentGroup;		
+
+   
+	// List container for all simulation results;
+	Rcpp::List allSims;
+	
+	for (int t=0;t<T;t++)
+	{
+		// instantiate object d of type user-defined type iData (individual data);
+		iData d(G,P);
+	
+		// instantiate vector container for study data;
+		std::vector<iData> idat;	
+	
+		double r=0, mean;
+		int s;
+		for (int n=0;n<N;n++)
+		{
+			// simulate randomization time;
+			     if (rDist=="Poisson-Process") { r += R::rexp(rParms[0]);            }
+			else if (rDist=="Uniform")         { r  = R::runif(rParms[0],rParms[1]); }
+			d.r = r;
+			
+			// simulate ascertainment time;
+				 if (aDist=="Normal")          { d.a  = R::rnorm(aParms[0],aParms[1]); }
+			else if (aDist=="Uniform")         { d.a  = R::runif(aParms[0],aParms[1]); }	
+				
+			// calculate elapsed time;
+			d.e = d.r + d.a;
+		
+			// create covariate vector;
+			d.x.fill(0); d.x[0] = 1;
+			
+				
+				// simulate treatment group;
+				s = n % B;
+				if (s == 0){trtseq_random = Rcpp::RcppArmadillo::sample(trtseq, B, FALSE, rP); }
+			
+				treatmentGroup[n] = trtseq_random[s]+1;
+				
+				d.x[trtseq_random[s]]=1;
+				
+				// simulate covariates;
+				for (int p=0;p<P;p++)
+				{
+					     if (cDist[p]=="Normal")    { d.x[G+p] = R::rnorm(cParms[p][0],cParms[p][1]); }	
+					else if (cDist[p]=="Bernoulli") { d.x[G+p] = R::rbinom(1,cParms[p][0]);           }	
+				}
+			
+			// simulate outcome;
+			mean = arma::as_scalar(d.x*dParms[0]);
+			
+			     if (dLink == "Log")                  { mean = exp(mean);                              }
+			else if (dLink == "Logistic")             { mean = exp(mean) / (1 + exp(mean));            }
+		    else if (dLink == "Probit")               { mean = R::pnorm(mean,0,1,TRUE,FALSE);          }
+
+				d.c = 0;
+			     if (dDist == "Normal")    { d.y = R::rnorm(mean,dParms[1][0]);                             }
+			else if (dDist == "Poisson")   { d.y = R::rpois(mean);                                          }
+			else if (dDist == "Bernoulli") { d.y = R::rbinom(1,mean);                                       }
+			else if (dDist == "Binomial")  { d.y = R::rbinom((int) dParms[1][0],mean); d.c = dParms[1][0];  }
+
+			idat.push_back(d);
+		}
+		
+		std::sort(idat.begin(),idat.end(),order_elapsed);
+										
+		for (int n=0;n<N;n++)
+		{		
+			y[n]     = idat[n].y;
+			c[n]     = idat[n].c;
+			x.row(n) = idat[n].x;
+			
+			rv[n]    = idat[n].r;
+			av[n]    = idat[n].a;
+			ev[n]    = idat[n].e;
+		}
+
+		Rcpp::List df;
+			df.push_back(y,"Outcome");
+			if (dDist == "Binomial") { df.push_back(c,"Trials"); }
+			df.push_back(rv,"r.time");			
+			df.push_back(av,"a.time");			
+			df.push_back(ev,"e.time");			
+			df.push_back(treatmentGroup,"trt.grp");					
+		
+		for (int i=0;i<G;i++)
+		{
+			df.push_back(x.col(i),"trt"+std::to_string(i));
+		} 	
+		for (int i=G;i<G+P;i++)
+		{
+			df.push_back(x.col(i),"cov"+std::to_string(i-(G-1)));
+		}	
+		allSims.push_back(Rcpp::as<Rcpp::DataFrame>(df));
+	}
+
+	return allSims; 					   
+}	
+
+
+
+
+//------------------------------- Error Checking Function Definitions -------------------------------------//
+
+Rcpp::List error_checking_dDist(std::string & dDist, std::string & dLink, std::vector<arma::vec> & dParms, int & G, int & P)
+{
+	std::string em = "Error Message";
+	
+	if ( (dDist != "Normal") & (dDist != "Poisson") & (dDist != "Bernoulli") & (dDist != "Binomial") ) 
+	{
+		return Rcpp::List::create( Rcpp::Named(em) = "Data distribution should be Normal, Poisson, Bernoulli, or Binomial.");
+	}
+	if ( (dLink != "Log") & (dLink != "Logistic") & (dLink != "Probit") & (dLink != "Log") & (dLink != "Identity") )
+	{
+		return Rcpp::List::create( Rcpp::Named(em) = "Link function should be Identity, Logistic, Probit, or Log."); 
+	}
+	if ( (int) dParms[0].n_rows != (G+P) )
+	{	
+		return Rcpp::List::create( Rcpp::Named(em) = "Dimension of mean parameter vector not equal to # of groups + # of covariates.");	
+	}		
+	
+	if (dDist == "Normal")
+	{
+		if (dParms.size() != 2)
+		{	return Rcpp::List::create( Rcpp::Named(em) = "Normal data model expects a 2-item list containing a vector of parameters for the mean and a one-element vector for the variance parameter.");	}
+		
+		if ( ( (int) dParms[1].n_rows > 1 ) | ( dParms[1][0] <=0 ) )
+		{	return Rcpp::List::create( Rcpp::Named(em) = "Variance parameter vector invalid.");	}
+	}
+	
+	if ( ( (dDist == "Poisson") | (dDist == "Bernoulli") ) & (dParms.size() != 1) )
+	{	return Rcpp::List::create( Rcpp::Named(em) = "Data model expects a 1-item list containing a vector of parameters for the mean.");	}	
+
+	return Rcpp::List::create(Rcpp::Named(em) = "No Input Errors Dectected.");
+}
+
+Rcpp::List error_checking_rDist(std::string & rDist, arma::vec & rParms)
+{
+	std::string em = "Error Message";
+	
+	if ( (rDist != "Poisson-Process") & (rDist != "Uniform") ) 
+	{
+		return Rcpp::List::create( Rcpp::Named(em) = "Enrollment distribution should be Poisson-Process or Uniform.");
+	}
+	if (rDist == "Poisson-Process")
+	{
+		if ( (rParms.size() != 1) | (rParms[0] <= 0) )
+		{
+			return Rcpp::List::create( Rcpp::Named(em) = "Invalid parameters for enrollment time distribution."); 		
+		}
+	}
+	return Rcpp::List::create(Rcpp::Named(em) = "No Input Errors Dectected.");
+}
+
+Rcpp::List error_checking_aDist(std::string & aDist, arma::vec & aParms)
+{
+	std::string em = "Error Message";
+	
+	if ( (aDist != "Normal") & (aDist != "Uniform") ) 
+	{
+		return Rcpp::List::create( Rcpp::Named(em) = "Ascertainment time distribution should be Normal or Uniform.");
+	}
+	if ( (aDist == "Normal") & ( (aParms.size() != 2) | (aParms[1] <= 0) ) )
+	{
+			return Rcpp::List::create( Rcpp::Named(em) = "Invalid parameters for normal ascertainment time distribution."); 		
+	}
+	if ( (aDist == "Uniform") & ( (aParms.size() != 2) | (aParms[0] <= 0) | (aParms[0] >= aParms[1]) ) )
+	{
+			return Rcpp::List::create( Rcpp::Named(em) = "Invalid parameters for uniform ascertainment time distribution."); 		
+	}	
+	return Rcpp::List::create(Rcpp::Named(em) = "No Input Errors Dectected.");
+}
+Rcpp::List error_checking_cov(int & P,std::vector<std::string> & cDist, std::vector<arma::vec> & cParms)
+{
+	std::string em = "Error Message";
+	
+	if ( ( P != (int)  cDist.size() ) & ( (P > 0) | (cDist[0] != "NA") )  ) { return Rcpp::List::create(Rcpp::Named(em) = "Dimension of vector of covariate distributions not equal to P.");}
+	if ( ( P != (int) cParms.size() ) & ( (P > 0) | (cDist[0] != "NA") )  ) { return Rcpp::List::create(Rcpp::Named(em) = "Dimension of list of covariate parameter vectors not equal to P.");}
+	
+	for (int p=0;p<P;p++)
+	{
+		if ( ( cDist[p]!="Normal" ) & ( cDist[p]!="Bernoulli" ) ) { return Rcpp::List::create(Rcpp::Named(em) = "Covariate " + std::to_string(p+1) + " distribution is invalid.");}
+		
+		if ( ( ( cDist[p]=="Normal" )    & ( (int) cParms[p].n_rows != 2 ) ) | 
+		     ( ( cDist[p]=="Bernoulli" ) & ( (int) cParms[p].n_rows != 1 ) ) ) 
+			{ return Rcpp::List::create(Rcpp::Named(em) = "Covariate " + std::to_string(p+1) + " distribution parameters invalid (incorrect dimension).");}
+
+		if ( ( ( cDist[p]=="Normal" )    & ( cParms[p][1] <= 0 ) ) | 
+		     ( ( cDist[p]=="Bernoulli" ) & ( cParms[p][0] <= 0 ) ) ) 
+			{ return Rcpp::List::create(Rcpp::Named(em) = "Covariate " + std::to_string(p+1) + " distribution parameters invalid (negative values).");}	 
+	}
+	return Rcpp::List::create(Rcpp::Named(em) = "No Input Errors Dectected.");
+}
+
+void err_print(Rcpp::List & x)
+{
+	Rcpp::Rcout << "ERROR: " + Rcpp::as<std::string>(x[0]) << std::endl;
+}
+
+
+
+
+
+
+					   
+')						   

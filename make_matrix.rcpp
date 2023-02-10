@@ -1,0 +1,94 @@
+
+
+####################################################################################################
+#### R code for Example A;
+r_make_matrix = function(R,C,V)
+{
+  return( matrix(V,nrow=R,ncol=C));
+}
+
+
+#### Rcpp code for Example B;
+sourceCpp(code='
+
+#include <Rcpp.h>
+
+// [[Rcpp::export]]
+Rcpp::NumericMatrix rcpp_make_matrix(int R, int C, double V)
+{
+   // create an NumericMatrix container named X with R rows and C columns;
+   Rcpp::NumericMatrix x(R,C);
+
+   // not that objects are indexed starting are ZERO!
+	for (int r=0;r<R;r++)
+	{
+		for (int c=0;c<C;c++)
+		{
+			x(r,c)=V;
+		}
+	}
+   return x;
+}
+
+')
+
+####################################################################################################
+#### Rcpp code for Example B - Version 2;
+sourceCpp(code='
+
+#include <Rcpp.h>
+
+// Use of a namespace to avoid two part referenc when creating objects/using functions 
+using namespace Rcpp;
+
+// [[Rcpp::export]]
+NumericMatrix rcpp_make_matrix2(int R, int C, double V)
+{
+   // create an NumericMatrix container named X with R rows and C columns;
+   NumericMatrix x(R,C);
+
+	for (int r=0;r<R;r++)
+	{
+		for (int c=0;c<C;c++)
+		{
+			x(r,c)=V;
+		}
+	}
+   return x;
+}
+
+')
+
+####################################################################################################
+#### Rcpp code for Example C;
+sourceCpp(code='
+
+// [[Rcpp::depends(RcppArmadillo)]]
+#include <RcppArmadillo.h>
+
+// [[Rcpp::export]]
+arma::mat arma_make_matrix(int R, int C, double V)
+{
+   arma::mat x(R,C);
+   x.fill(V);
+   return x;
+}
+
+')
+
+####################################################################################################
+#### Rcpp code for Example C - Version 2;
+sourceCpp(code='
+
+// [[Rcpp::depends(RcppArmadillo)]]
+#include <RcppArmadillo.h>
+
+// [[Rcpp::export]]
+arma::imat arma_make_matrix2(int R, int C, double V)
+{
+   arma::imat x(R,C);
+   x.fill(V);
+   return x;
+}
+
+')
